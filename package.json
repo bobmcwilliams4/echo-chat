@@ -1,0 +1,21 @@
+{
+  "name": "echo-chat",
+  "version": "1.0.0",
+  "description": "Universal AI Chat Worker for all Echo Omega Prime websites and programs",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create echo-chat",
+    "db:migrate": "wrangler d1 execute echo-chat --remote --file=schema.sql",
+    "db:seed": "wrangler d1 execute echo-chat --remote --file=seed.sql"
+  },
+  "dependencies": {
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.109.0"
+  }
+}

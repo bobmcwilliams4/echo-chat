@@ -1,0 +1,36 @@
+name = "echo-chat"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "production"
+DEFAULT_PERSONALITY = "EP"
+# Memory Cortex
+SHARED_BRAIN_URL = "https://echo-shared-brain.bmcii1976.workers.dev"
+MEMORY_PRIME_URL = "https://echo-memory-prime.bmcii1976.workers.dev"
+SENTINEL_MEMORY_URL = "https://echo-sentinel-memory.bmcii1976.workers.dev"
+# Engine + Swarm
+ENGINE_RUNTIME_URL = "https://echo-engine-runtime.bmcii1976.workers.dev"
+SWARM_BRAIN_URL = "https://echo-swarm-brain.bmcii1976.workers.dev"
+# Voice
+ECHO_SPEAK_URL = "https://tts.echo-op.com"
+# Infrastructure
+BUILD_ORCHESTRATOR_URL = "https://echo-build-orchestrator.bmcii1976.workers.dev"
+KNOWLEDGE_FORGE_URL = "https://echo-knowledge-forge.bmcii1976.workers.dev"
+OMNISYNC_URL = "https://omniscient-sync.bmcii1976.workers.dev"
+ECHO_RELAY_URL = "https://echo-relay.bmcii1976.workers.dev"
+SHADOWGLASS_URL = "https://shadowglass-v8-warpspeed.bmcii1976.workers.dev"
+FORGEX_URL = "https://forge-x-cloud.bmcii1976.workers.dev"
+# Auth
+COMMANDER_EMAIL = "bmcii1976@gmail.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "echo-chat"
+database_id = "8d7554ca-fd7b-4b38-90e9-495b021d1d33"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "a39af240354041158e0a9163cb6fc589"
