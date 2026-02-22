@@ -97,21 +97,31 @@ export async function lookupDoctrines(
   limit: number = 5,
 ): Promise<DoctrineResult[]> {
   try {
-    const body: Record<string, unknown> = { query, mode, limit };
-    if (domain) body.domain = domain;
+    // Engine Runtime uses /search (GET or POST), NOT /query
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    if (domain) params.set('category', domain.toUpperCase());
 
-    const response = await fetch(`${env.ENGINE_RUNTIME_URL}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    const path = `/search?${params}`;
+    console.log(`[DOCTRINE] Fetching via service binding: ${path}`);
+
+    // Use Service Binding for Worker-to-Worker communication (avoids error 1042)
+    const response = await env.ENGINE_RUNTIME_SVC.fetch(`https://internal${path}`, {
       signal: AbortSignal.timeout(15000),
     });
 
-    if (!response.ok) return [];
+    console.log(`[DOCTRINE] Response status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log(`[DOCTRINE] Error response: ${errorText.slice(0, 200)}`);
+      return [];
+    }
 
     const data = await response.json() as { results?: DoctrineResult[] };
+    console.log(`[DOCTRINE] Results count: ${data.results?.length ?? 0}`);
     return data.results ?? [];
-  } catch {
+  } catch (err) {
+    console.error(`[DOCTRINE] Fetch error: ${err instanceof Error ? err.message : String(err)}`);
     return [];
   }
 }
@@ -187,6 +197,8 @@ export async function engageEchoMode(
   const domains = detectDomains(message);
   const forceDoctrine = requestedMode === 'doctrine' || requestedMode === 'echo';
   const autoEngage = shouldEngageDoctrine(domains);
+
+  console.log(`[ECHO_MODE] domains=${JSON.stringify(domains)}, force=${forceDoctrine}, auto=${autoEngage}, mode=${requestedMode}`);
 
   if (!forceDoctrine && !autoEngage) {
     return { doctrines: [], confidence: '', doctrineContext: '', domains, engaged: false };

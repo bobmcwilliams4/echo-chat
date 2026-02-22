@@ -436,9 +436,9 @@ app.get('/health', async (c) => {
   } catch { /* ignore */ }
 
   const services = await Promise.allSettled([
-    checkServiceHealth(c.env.ENGINE_RUNTIME_URL, 'engine-runtime'),
-    checkServiceHealth(c.env.SWARM_BRAIN_URL, 'swarm-brain'),
-    checkServiceHealth(c.env.SHARED_BRAIN_URL, 'shared-brain'),
+    checkServiceHealth(c.env.ENGINE_RUNTIME_SVC, 'engine-runtime'),
+    checkServiceHealth(c.env.SWARM_BRAIN_SVC, 'swarm-brain'),
+    checkServiceHealth(c.env.SHARED_BRAIN_SVC, 'shared-brain'),
   ]);
 
   const serviceResults = services.map((s, i) =>

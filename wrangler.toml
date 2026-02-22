@@ -34,3 +34,49 @@ database_id = "8d7554ca-fd7b-4b38-90e9-495b021d1d33"
 [[kv_namespaces]]
 binding = "CACHE"
 id = "a39af240354041158e0a9163cb6fc589"
+
+# Service Bindings — Worker-to-Worker direct communication
+# Required because same-account Workers can't fetch via *.workers.dev URLs
+[[services]]
+binding = "ENGINE_RUNTIME_SVC"
+service = "echo-engine-runtime"
+
+[[services]]
+binding = "SHARED_BRAIN_SVC"
+service = "echo-shared-brain"
+
+[[services]]
+binding = "MEMORY_PRIME_SVC"
+service = "echo-memory-prime"
+
+[[services]]
+binding = "SENTINEL_MEMORY_SVC"
+service = "echo-sentinel-memory"
+
+[[services]]
+binding = "SWARM_BRAIN_SVC"
+service = "echo-swarm-brain"
+
+[[services]]
+binding = "BUILD_ORCHESTRATOR_SVC"
+service = "echo-build-orchestrator"
+
+[[services]]
+binding = "KNOWLEDGE_FORGE_SVC"
+service = "echo-knowledge-forge"
+
+[[services]]
+binding = "OMNISYNC_SVC"
+service = "omniscient-sync"
+
+[[services]]
+binding = "SHADOWGLASS_SVC"
+service = "shadowglass-v8-warpspeed"
+
+[[services]]
+binding = "FORGEX_SVC"
+service = "forge-x-cloud"
+
+[[services]]
+binding = "ECHO_RELAY_SVC"
+service = "echo-relay"

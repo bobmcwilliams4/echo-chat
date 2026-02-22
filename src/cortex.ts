@@ -11,9 +11,17 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
   });
 }
 
+// Service Binding fetch — bypasses *.workers.dev routing (error 1042)
+async function svcFetch(svc: Fetcher, path: string, options: RequestInit, timeoutMs: number = 10000): Promise<Response> {
+  return svc.fetch(`https://internal${path}`, {
+    ...options,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
 async function querySharedBrain(env: Env, userId: string, query: string): Promise<CortexMemory[]> {
   try {
-    const response = await fetchWithTimeout(`${env.SHARED_BRAIN_URL}/context`, {
+    const response = await svcFetch(env.SHARED_BRAIN_SVC, '/context', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -22,7 +30,7 @@ async function querySharedBrain(env: Env, userId: string, query: string): Promis
         conversation_id: `chat_${userId}`,
       }),
     });
-    if (!response.ok) return [];
+    if (!response.ok) { await response.text(); return []; }
     const data = await response.json() as { memories?: Array<{ content: string; importance?: number; timestamp?: string; tags?: string[] }> };
     return (data.memories ?? []).map(m => ({
       content: m.content,
@@ -38,10 +46,10 @@ async function querySharedBrain(env: Env, userId: string, query: string): Promis
 
 async function queryMemoryPrime(env: Env, query: string): Promise<CortexMemory[]> {
   try {
-    const response = await fetchWithTimeout(
-      `${env.MEMORY_PRIME_URL}/recall?query=${encodeURIComponent(query)}&limit=5`, { method: 'GET' },
+    const response = await svcFetch(
+      env.MEMORY_PRIME_SVC, `/recall?query=${encodeURIComponent(query)}&limit=5`, { method: 'GET' },
     );
-    if (!response.ok) return [];
+    if (!response.ok) { await response.text(); return []; }
     const data = await response.json() as { results?: Array<{ content: string; importance?: number; category?: string; created_at?: string; tags?: string[] }> };
     return (data.results ?? []).map(m => ({
       content: m.content,
@@ -57,12 +65,12 @@ async function queryMemoryPrime(env: Env, query: string): Promise<CortexMemory[]
 
 async function querySentinelMemory(env: Env, userId: string): Promise<CortexMemory[]> {
   try {
-    const response = await fetchWithTimeout(`${env.SENTINEL_MEMORY_URL}/api/context`, {
+    const response = await svcFetch(env.SENTINEL_MEMORY_SVC, '/api/context', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ player_id: userId, limit: 5 }),
     });
-    if (!response.ok) return [];
+    if (!response.ok) { await response.text(); return []; }
     const data = await response.json() as { context?: Array<{ content: string; type?: string; importance?: number }> };
     return (data.context ?? []).map(m => ({
       content: m.content,
@@ -89,7 +97,7 @@ async function queryCognitionCloud(env: Env, query: string): Promise<CortexMemor
       { method: 'GET' },
       8000,
     );
-    if (!response.ok) return [];
+    if (!response.ok) { await response.text(); return []; }
     const data = await response.json() as { results?: Array<{ content: string; score?: number }> };
     return (data.results ?? []).map(m => ({
       content: m.content,
@@ -130,23 +138,23 @@ export async function storeToAllMemory(
 
   await Promise.allSettled([
     // Shared Brain
-    fetchWithTimeout(`${env.SHARED_BRAIN_URL}/ingest`, {
+    svcFetch(env.SHARED_BRAIN_SVC, '/ingest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ instance_id: instanceId, role: 'assistant', content, importance, tags }),
-    }, 5000),
+    }, 5000).then(r => { r.body?.cancel(); }),
     // Memory Prime
-    fetchWithTimeout(`${env.MEMORY_PRIME_URL}/store`, {
+    svcFetch(env.MEMORY_PRIME_SVC, '/store', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category: 'chat_memory', content, tags, importance }),
-    }, 5000),
+    }, 5000).then(r => { r.body?.cancel(); }),
     // Sentinel Memory (only if importance >= 7)
-    ...(importance >= 7 ? [fetchWithTimeout(`${env.SENTINEL_MEMORY_URL}/api/memory`, {
+    ...(importance >= 7 ? [svcFetch(env.SENTINEL_MEMORY_SVC, '/api/memory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ player_id: userId, content, importance, type: 'chat_memory' }),
-    }, 5000)] : []),
+    }, 5000).then(r => { r.body?.cancel(); })] : []),
   ]);
 }
 
@@ -156,14 +164,14 @@ export async function searchAllMemory(
   limit: number = 10,
 ): Promise<CortexMemory[]> {
   const [brainResults, primeResults] = await Promise.allSettled([
-    fetchWithTimeout(`${env.SHARED_BRAIN_URL}/search`, {
+    svcFetch(env.SHARED_BRAIN_SVC, '/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, limit }),
-    }).then(r => r.json() as Promise<{ results?: CortexMemory[] }>),
-    fetchWithTimeout(`${env.MEMORY_PRIME_URL}/search?q=${encodeURIComponent(query)}&limit=${limit}`, {
+    }).then(async r => { if (!r.ok) { await r.text(); return { results: [] as CortexMemory[] }; } return r.json() as Promise<{ results?: CortexMemory[] }>; }),
+    svcFetch(env.MEMORY_PRIME_SVC, `/search?q=${encodeURIComponent(query)}&limit=${limit}`, {
       method: 'GET',
-    }).then(r => r.json() as Promise<{ results?: Array<{ content: string; importance?: number; category?: string }> }>),
+    }).then(async r => { if (!r.ok) { await r.text(); return { results: [] as Array<{ content: string; importance?: number; category?: string }> }; } return r.json() as Promise<{ results?: Array<{ content: string; importance?: number; category?: string }> }>; }),
   ]);
 
   const results: CortexMemory[] = [];
@@ -212,16 +220,17 @@ Use these memories to personalize your response. Reference past conversations na
 }
 
 export async function getCortexHealth(env: Env): Promise<Array<{ system: string; status: string; latency_ms: number }>> {
-  const systems = [
-    { name: 'shared-brain', url: `${env.SHARED_BRAIN_URL}/health` },
-    { name: 'memory-prime', url: `${env.MEMORY_PRIME_URL}/health` },
-    { name: 'sentinel-memory', url: `${env.SENTINEL_MEMORY_URL}/health` },
+  const systems: Array<{ name: string; svc: Fetcher }> = [
+    { name: 'shared-brain', svc: env.SHARED_BRAIN_SVC },
+    { name: 'memory-prime', svc: env.MEMORY_PRIME_SVC },
+    { name: 'sentinel-memory', svc: env.SENTINEL_MEMORY_SVC },
   ];
 
   const results = await Promise.allSettled(
     systems.map(async s => {
       const start = Date.now();
-      const r = await fetchWithTimeout(s.url, { method: 'GET' }, 5000);
+      const r = await svcFetch(s.svc, '/health', { method: 'GET' }, 5000);
+      await r.text();
       return { system: s.name, status: r.ok ? 'up' : 'degraded', latency_ms: Date.now() - start };
     })
   );

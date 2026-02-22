@@ -15,7 +15,7 @@ async function callRelay(
   timeoutMs: number = 20000,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   try {
-    const response = await fetch(`${env.ECHO_RELAY_URL}/execute`, {
+    const response = await env.ECHO_RELAY_SVC.fetch('https://internal/execute', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -78,11 +78,11 @@ export async function runCommand(env: Env, command: string): Promise<{ success: 
 export async function getRelayStatus(env: Env): Promise<{ connected: boolean; tools?: number; latency_ms?: number }> {
   try {
     const start = Date.now();
-    const response = await fetch(`${env.ECHO_RELAY_URL}/health`, {
+    const response = await env.ECHO_RELAY_SVC.fetch('https://internal/health', {
       method: 'GET',
       signal: AbortSignal.timeout(5000),
     });
-    if (!response.ok) return { connected: false };
+    if (!response.ok) { await response.text(); return { connected: false }; }
     const data = await response.json() as { tools?: number };
     return {
       connected: true,

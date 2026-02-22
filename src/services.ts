@@ -10,24 +10,29 @@ async function safeFetch(url: string, options?: RequestInit, timeoutMs: number =
   });
 }
 
+// Service Binding fetch — bypasses *.workers.dev routing (error 1042)
+async function svcFetch(svc: Fetcher, path: string, options?: RequestInit, timeoutMs: number = 15000): Promise<Response> {
+  return svc.fetch(`https://internal${path}`, {
+    ...options,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
 // --- Engine Runtime (674 engines, 30,626 doctrines) ---
 export async function queryEngineRuntime(
   env: Env,
   query: string,
   domain?: string,
-  mode: string = 'FAST',
+  _mode: string = 'FAST',
 ): Promise<{ results: unknown[]; count: number }> {
   try {
-    const body: Record<string, unknown> = { query, mode, limit: 5 };
-    if (domain) body.domain = domain;
+    const params = new URLSearchParams({ q: query, limit: '5' });
+    if (domain) params.set('category', domain.toUpperCase());
 
-    const r = await safeFetch(`${env.ENGINE_RUNTIME_URL}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) return { results: [], count: 0 };
-    return await r.json() as { results: unknown[]; count: number };
+    const r = await svcFetch(env.ENGINE_RUNTIME_SVC, `/search?${params}`, { method: 'GET' });
+    if (!r.ok) { await r.text(); return { results: [], count: 0 }; }
+    const data = await r.json() as { results?: unknown[]; count?: number };
+    return { results: data.results ?? [], count: data.count ?? (data.results?.length ?? 0) };
   } catch {
     return { results: [], count: 0 };
   }
@@ -39,12 +44,12 @@ export async function querySwarmTrinity(
   question: string,
 ): Promise<SwarmResult | null> {
   try {
-    const r = await safeFetch(`${env.SWARM_BRAIN_URL}/trinity/decide`, {
+    const r = await svcFetch(env.SWARM_BRAIN_SVC, '/trinity/decide', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question, require_consensus: true }),
     }, 20000);
-    if (!r.ok) return null;
+    if (!r.ok) { await r.text(); return null; }
     return await r.json() as SwarmResult;
   } catch {
     return null;
@@ -57,12 +62,12 @@ export async function querySwarmProcess(
   agents?: number,
 ): Promise<SwarmResult | null> {
   try {
-    const r = await safeFetch(`${env.SWARM_BRAIN_URL}/swarm/process`, {
+    const r = await svcFetch(env.SWARM_BRAIN_SVC, '/swarm/process', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task, agent_count: agents ?? 5 }),
     }, 25000);
-    if (!r.ok) return null;
+    if (!r.ok) { await r.text(); return null; }
     return await r.json() as SwarmResult;
   } catch {
     return null;
@@ -71,8 +76,8 @@ export async function querySwarmProcess(
 
 export async function getSwarmStatus(env: Env): Promise<{ status: string; agents: number } | null> {
   try {
-    const r = await safeFetch(`${env.SWARM_BRAIN_URL}/agents/status`, { method: 'GET' }, 5000);
-    if (!r.ok) return null;
+    const r = await svcFetch(env.SWARM_BRAIN_SVC, '/agents/status', { method: 'GET' }, 5000);
+    if (!r.ok) { await r.text(); return null; }
     return await r.json() as { status: string; agents: number };
   } catch {
     return null;
@@ -86,11 +91,11 @@ export async function queryKnowledgeForge(
   limit: number = 5,
 ): Promise<unknown[]> {
   try {
-    const r = await safeFetch(
-      `${env.KNOWLEDGE_FORGE_URL}/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    const r = await svcFetch(
+      env.KNOWLEDGE_FORGE_SVC, `/search?q=${encodeURIComponent(query)}&limit=${limit}`,
       { method: 'GET' },
     );
-    if (!r.ok) return [];
+    if (!r.ok) { await r.text(); return []; }
     const data = await r.json() as { results?: unknown[] };
     return data.results ?? [];
   } catch {
@@ -110,8 +115,8 @@ export async function queryShadowGlass(
     if (docType) params.set('doc_type', docType);
     if (query) params.set('q', query);
 
-    const r = await safeFetch(`${env.SHADOWGLASS_URL}/search?${params}`, { method: 'GET' });
-    if (!r.ok) return [];
+    const r = await svcFetch(env.SHADOWGLASS_SVC, `/search?${params}`, { method: 'GET' });
+    if (!r.ok) { await r.text(); return []; }
     const data = await r.json() as { results?: unknown[] };
     return data.results ?? [];
   } catch {
@@ -125,8 +130,8 @@ export async function queryBuildOrchestrator(
   endpoint: string = '/status',
 ): Promise<unknown | null> {
   try {
-    const r = await safeFetch(`${env.BUILD_ORCHESTRATOR_URL}${endpoint}`, { method: 'GET' }, 10000);
-    if (!r.ok) return null;
+    const r = await svcFetch(env.BUILD_ORCHESTRATOR_SVC, endpoint, { method: 'GET' }, 10000);
+    if (!r.ok) { await r.text(); return null; }
     return await r.json();
   } catch {
     return null;
@@ -139,8 +144,8 @@ export async function queryOmniSync(
   path: string = '/todos',
 ): Promise<unknown | null> {
   try {
-    const r = await safeFetch(`${env.OMNISYNC_URL}${path}`, { method: 'GET' }, 8000);
-    if (!r.ok) return null;
+    const r = await svcFetch(env.OMNISYNC_SVC, path, { method: 'GET' }, 8000);
+    if (!r.ok) { await r.text(); return null; }
     return await r.json();
   } catch {
     return null;
@@ -156,11 +161,12 @@ export async function storeToSharedBrain(
   tags: string[] = [],
 ): Promise<void> {
   try {
-    await safeFetch(`${env.SHARED_BRAIN_URL}/ingest`, {
+    const r = await svcFetch(env.SHARED_BRAIN_SVC, '/ingest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ instance_id: instanceId, role: 'assistant', content, importance, tags }),
     }, 5000);
+    r.body?.cancel();
   } catch {
     // Fire and forget
   }
@@ -173,21 +179,23 @@ export async function broadcastToAllInstances(
   priority: string = 'normal',
 ): Promise<void> {
   try {
-    await safeFetch(`${env.OMNISYNC_URL}/broadcasts`, {
+    const r = await svcFetch(env.OMNISYNC_SVC, '/broadcasts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, priority, source: 'echo-chat' }),
     }, 5000);
+    r.body?.cancel();
   } catch {
     // Fire and forget
   }
 }
 
 // --- Health Checks ---
-export async function checkServiceHealth(url: string, name: string): Promise<ServiceHealth> {
+export async function checkServiceHealth(svc: Fetcher, name: string): Promise<ServiceHealth> {
   try {
     const start = Date.now();
-    const r = await safeFetch(`${url}/health`, { method: 'GET' }, 5000);
+    const r = await svcFetch(svc, '/health', { method: 'GET' }, 5000);
+    await r.text();
     return {
       service: name,
       status: r.ok ? 'up' : 'degraded',
@@ -200,21 +208,21 @@ export async function checkServiceHealth(url: string, name: string): Promise<Ser
 
 export async function getFullInfrastructureStatus(env: Env): Promise<InfrastructureStatus> {
   const workerChecks = [
-    { url: env.ENGINE_RUNTIME_URL, name: 'engine-runtime' },
-    { url: env.SWARM_BRAIN_URL, name: 'swarm-brain' },
-    { url: env.SHARED_BRAIN_URL, name: 'shared-brain' },
-    { url: env.MEMORY_PRIME_URL, name: 'memory-prime' },
-    { url: env.SENTINEL_MEMORY_URL, name: 'sentinel-memory' },
-    { url: env.BUILD_ORCHESTRATOR_URL, name: 'build-orchestrator' },
-    { url: env.KNOWLEDGE_FORGE_URL, name: 'knowledge-forge' },
-    { url: env.OMNISYNC_URL, name: 'omnisync' },
-    { url: env.ECHO_RELAY_URL, name: 'echo-relay' },
-    { url: env.SHADOWGLASS_URL, name: 'shadowglass' },
-    { url: env.FORGEX_URL, name: 'forge-x' },
+    { svc: env.ENGINE_RUNTIME_SVC, name: 'engine-runtime' },
+    { svc: env.SWARM_BRAIN_SVC, name: 'swarm-brain' },
+    { svc: env.SHARED_BRAIN_SVC, name: 'shared-brain' },
+    { svc: env.MEMORY_PRIME_SVC, name: 'memory-prime' },
+    { svc: env.SENTINEL_MEMORY_SVC, name: 'sentinel-memory' },
+    { svc: env.BUILD_ORCHESTRATOR_SVC, name: 'build-orchestrator' },
+    { svc: env.KNOWLEDGE_FORGE_SVC, name: 'knowledge-forge' },
+    { svc: env.OMNISYNC_SVC, name: 'omnisync' },
+    { svc: env.ECHO_RELAY_SVC, name: 'echo-relay' },
+    { svc: env.SHADOWGLASS_SVC, name: 'shadowglass' },
+    { svc: env.FORGEX_SVC, name: 'forge-x' },
   ];
 
   const healthResults = await Promise.allSettled(
-    workerChecks.map(w => checkServiceHealth(w.url, w.name))
+    workerChecks.map(w => checkServiceHealth(w.svc, w.name))
   );
 
   const workers = healthResults.map((r, i) =>

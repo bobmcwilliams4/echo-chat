@@ -32,6 +32,18 @@ export interface Env {
   ELEVENLABS_API_KEY: string;
   ECHO_API_KEY: string;
   GITHUB_TOKEN: string;
+  // Service Bindings (Worker-to-Worker direct communication)
+  ENGINE_RUNTIME_SVC: Fetcher;
+  SHARED_BRAIN_SVC: Fetcher;
+  MEMORY_PRIME_SVC: Fetcher;
+  SENTINEL_MEMORY_SVC: Fetcher;
+  SWARM_BRAIN_SVC: Fetcher;
+  BUILD_ORCHESTRATOR_SVC: Fetcher;
+  KNOWLEDGE_FORGE_SVC: Fetcher;
+  OMNISYNC_SVC: Fetcher;
+  SHADOWGLASS_SVC: Fetcher;
+  FORGEX_SVC: Fetcher;
+  ECHO_RELAY_SVC: Fetcher;
 }
 
 export interface ChatRequest {
