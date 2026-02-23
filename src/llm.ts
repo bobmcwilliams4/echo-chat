@@ -29,7 +29,7 @@ async function callClaudeProxy(messages: LLMMessage[], env: Env): Promise<LLMRes
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ system, query }),
-    signal: AbortSignal.timeout(60000), // Claude can take longer but worth it
+    signal: AbortSignal.timeout(15000), // Fast timeout — fall to Azure quickly if proxy slow
   });
 
   if (!response.ok) {
