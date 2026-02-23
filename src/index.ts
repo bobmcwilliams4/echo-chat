@@ -289,14 +289,30 @@ app.post('/memory/search', async (c) => {
 });
 
 // ============================================================
-// POST /tts - Generate voice
+// POST /tts - Generate voice (returns raw audio or JSON with base64)
 // ============================================================
 app.post('/tts', async (c) => {
-  const { text, personality: pId, emotion, provider } = await c.req.json<{
-    text: string; personality?: string; emotion?: string; provider?: string;
+  const { text, personality: pId, emotion, provider, format } = await c.req.json<{
+    text: string; personality?: string; emotion?: string; provider?: string; format?: string;
   }>();
   const personality = getPersonality(pId ?? 'EP') ?? getPersonality('EP')!;
   const result = await generateVoice(text, personality, emotion ?? 'neutral', c.env, provider);
+
+  // If we have base64 audio, return it as raw audio bytes for direct playback
+  if (result.audio_base64 && format !== 'json') {
+    const binary = atob(result.audio_base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Response(bytes, {
+      headers: {
+        'Content-Type': result.content_type || 'audio/wav',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
   return c.json(result);
 });
 

@@ -1,5 +1,7 @@
 // Echo Chat - Multi-LLM Router with Fallback Chain
-// Free tier: Azure GPT-4.1, Grok 3 mini, DeepSeek V3, OpenRouter
+// PRIMARY: Claude Code CLI Proxy (Claude.ai subscription, free with plan)
+// SECONDARY: Azure GPT-4.1 (GitHub Models, free until May 2026)
+// TERTIARY: Grok 3 mini, DeepSeek V3, OpenRouter (additional fallbacks)
 
 import type { Env, LLMMessage, LLMResponse, PersonalityDef } from './types';
 
@@ -10,6 +12,46 @@ interface LLMProvider {
   best_for: string[];
 }
 
+// ─── PRIMARY: Claude Code CLI Proxy ────────────────────────────────────────
+// Local proxy at claude-proxy.echo-op.com wraps `claude -p` subprocess.
+// Uses Claude.ai subscription (free with plan). Sonnet 4.5 default, max output.
+async function callClaudeProxy(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
+  const start = Date.now();
+  const proxyUrl = (env.CLAUDE_PROXY_URL || 'https://claude-proxy.echo-op.com').replace(/\/+$/, '');
+
+  // Build system + query from messages array
+  const systemMsgs = messages.filter(m => m.role === 'system').map(m => m.content);
+  const userMsgs = messages.filter(m => m.role === 'user').map(m => m.content);
+  const system = systemMsgs.join('\n\n') || undefined;
+  const query = userMsgs[userMsgs.length - 1] || '';
+
+  const response = await fetch(`${proxyUrl}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system, query }),
+    signal: AbortSignal.timeout(60000), // Claude can take longer but worth it
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Claude Proxy error ${response.status}: ${text.slice(0, 200)}`);
+  }
+
+  const data = await response.json() as {
+    response: string;
+    model?: string;
+    elapsed_ms?: number;
+  };
+
+  return {
+    content: data.response ?? '',
+    provider: `claude-proxy-${data.model || 'sonnet'}`,
+    tokens_used: 0,
+    latency_ms: Date.now() - start,
+  };
+}
+
+// ─── SECONDARY: Azure GPT-4.1 ─────────────────────────────────────────────
 async function callAzureGPT(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
   const endpoint = (env.AZURE_OPENAI_ENDPOINT || 'https://models.github.ai/inference/v1').replace(/\/+$/, '');
@@ -46,6 +88,7 @@ async function callAzureGPT(messages: LLMMessage[], env: Env): Promise<LLMRespon
   };
 }
 
+// ─── TERTIARY: Grok 3 mini ─────────────────────────────────────────────────
 async function callGrok(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
   const response = await fetch('https://api.x.ai/v1/chat/completions', {
@@ -80,6 +123,7 @@ async function callGrok(messages: LLMMessage[], env: Env): Promise<LLMResponse> 
   };
 }
 
+// ─── TERTIARY: DeepSeek V3 ─────────────────────────────────────────────────
 async function callDeepSeek(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
   const response = await fetch('https://api.deepseek.com/chat/completions', {
@@ -114,6 +158,7 @@ async function callDeepSeek(messages: LLMMessage[], env: Env): Promise<LLMRespon
   };
 }
 
+// ─── QUATERNARY: OpenRouter (free tier) ─────────────────────────────────────
 async function callOpenRouter(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -150,7 +195,9 @@ async function callOpenRouter(messages: LLMMessage[], env: Env): Promise<LLMResp
   };
 }
 
+// ─── Provider Registry ──────────────────────────────────────────────────────
 const PROVIDERS: LLMProvider[] = [
+  { name: 'claude-proxy', call: callClaudeProxy, priority: 0, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX', 'GS', 'PH', 'analysis', 'code'] },
   { name: 'azure-gpt-4.1', call: callAzureGPT, priority: 1, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX'] },
   { name: 'grok-3-mini', call: callGrok, priority: 2, best_for: ['BR', 'creative', 'sarcasm', 'casual'] },
   { name: 'deepseek-v3', call: callDeepSeek, priority: 3, best_for: ['code', 'analysis', 'R2', '3P'] },
@@ -232,6 +279,7 @@ export async function routeLLM(
 
 function getProviderKey(providerName: string, env: Env): string | undefined {
   switch (providerName) {
+    case 'claude-proxy': return env.CLAUDE_PROXY_URL || 'https://claude-proxy.echo-op.com';
     case 'azure-gpt-4.1': return env.AZURE_API_KEY;
     case 'grok-3-mini': return env.XAI_API_KEY;
     case 'deepseek-v3': return env.DEEPSEEK_API_KEY;

@@ -9,7 +9,7 @@ export async function generateVoice(
   emotion: string,
   env: Env,
   provider?: string,
-): Promise<{ audio_url?: string; audio_base64?: string; error?: string }> {
+): Promise<{ audio_url?: string; audio_base64?: string; content_type?: string; error?: string }> {
   const useProvider = provider ?? personality.voice_provider ?? 'echo-speak';
 
   if (useProvider === 'echo-speak') {
@@ -28,7 +28,7 @@ async function generateEchoSpeak(
   personality: PersonalityDef,
   emotion: string,
   env: Env,
-): Promise<{ audio_url?: string; error?: string }> {
+): Promise<{ audio_base64?: string; content_type?: string; error?: string }> {
   try {
     const voiceName = getEchoSpeakVoice(personality.id);
     const cleanText = stripMarkdown(text);
@@ -38,20 +38,27 @@ async function generateEchoSpeak(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: cleanText,
-        voice: voiceName,
-        emotion: emotion !== 'neutral' ? emotion : undefined,
+        voice_id: voiceName,
         speed: 1.0,
-        format: 'mp3',
+        output_format: 'wav',
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!response.ok) {
       return { error: `Echo Speak error: ${response.status}` };
     }
 
-    const data = await response.json() as { audio_url?: string; url?: string };
-    return { audio_url: data.audio_url ?? data.url };
+    // Echo Speak returns raw audio bytes, not JSON
+    const arrayBuffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+    const contentType = response.headers.get('content-type') || 'audio/wav';
+    return { audio_base64: base64, content_type: contentType };
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Echo Speak unavailable' };
   }
@@ -117,22 +124,22 @@ async function generateCartesia(
 
 function getEchoSpeakVoice(personalityId: string): string {
   const voiceMap: Record<string, string> = {
-    EP: 'Echo',
-    BR: 'Luna',
-    RA: 'Ryan',
-    SA: 'Echo',
-    TH: 'Ryan',
-    NX: 'Luna',
-    GS: 'Echo',
-    PH: 'Echo',
-    PR: 'Ryan',
-    BE: 'Luna',
-    TE: 'Ryan',
-    WM: 'Luna',
-    R2: 'Echo',
-    '3P': 'Echo',
+    EP: 'default',
+    BR: 'luna',
+    RA: 'ryan',
+    SA: 'default',
+    TH: 'ryan',
+    NX: 'luna',
+    GS: 'default',
+    PH: 'default',
+    PR: 'ryan',
+    BE: 'luna',
+    TE: 'ryan',
+    WM: 'luna',
+    R2: 'default',
+    '3P': 'default',
   };
-  return voiceMap[personalityId] ?? 'Echo';
+  return voiceMap[personalityId] ?? 'default';
 }
 
 function stripMarkdown(text: string): string {

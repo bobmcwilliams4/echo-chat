@@ -23,6 +23,8 @@ export interface Env {
   FORGEX_URL: string;
   // Auth
   COMMANDER_EMAIL: string;
+  // Claude CLI Proxy (PRIMARY LLM)
+  CLAUDE_PROXY_URL: string;
   // Secrets
   AZURE_API_KEY: string;
   AZURE_OPENAI_ENDPOINT: string;
