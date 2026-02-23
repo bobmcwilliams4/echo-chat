@@ -60,31 +60,42 @@ app.post('/chat', async (c) => {
   const currentSessionId = session_id ?? generateSessionId();
 
   try {
-    // 1. Get or create user profile
-    const user = await getOrCreateUser(env.DB, user_id, email);
+    // ── PARALLEL PHASE: Fire all independent lookups simultaneously ──
+    // These only depend on user_id/site_id/message from the request body.
+    // Running them in parallel cuts ~60s of serial D1 + HTTP waits to ~8s.
+    const [userResult, siteResult, historyResult, cortexResult, echoResult, memsResult, swarmResult_] = await Promise.all([
+      getOrCreateUser(env.DB, user_id, email),
+      getSiteConfig(env.DB, site_id, env.CACHE),
+      getConversationHistory(env.DB, user_id, site_id, 40),
+      loadFullContext(env, user_id, message),
+      engageEchoMode(env, message, mode),
+      getMemories(env.DB, user_id, 10),
+      mode === 'swarm' ? querySwarmTrinity(env, message) : Promise.resolve(null),
+    ]);
 
-    // 2. Authenticate user (bloodline check)
+    const user = userResult;
+    const siteConfig = siteResult;
+    const history = historyResult;
+    const cortex = cortexResult;
+    const echoMode = echoResult;
+    const localMems = memsResult;
+    let swarmResult = swarmResult_;
+    const maxHistory = siteConfig?.max_history ?? 40;
+
+    // ── SEQUENTIAL PHASE: Steps that depend on parallel results ──
+
+    // 2. Authenticate user (needs user object)
     const auth = authenticateUser(user, email ?? user.email ?? undefined, env.COMMANDER_EMAIL);
 
-    // 3. Update authority if Commander detected
+    // 3. Update authority if Commander detected (fire-and-forget)
     if (auth.is_commander && user.is_commander !== 1) {
       c.executionCtx.waitUntil(updateUserAuthority(env.DB, user_id, email, env.COMMANDER_EMAIL));
     }
 
-    // 4. Load site config
-    const siteConfig = await getSiteConfig(env.DB, site_id, env.CACHE);
-
-    // 5. Get conversation history
-    const maxHistory = siteConfig?.max_history ?? 40;
-    const history = await getConversationHistory(env.DB, user_id, site_id, maxHistory);
-
-    // 6. Load memory cortex (all 5 systems in parallel)
-    const cortex = await loadFullContext(env, user_id, message);
-
-    // 7. Detect emotion
+    // 7. Detect emotion (sync, instant)
     const emotion = detectEmotion(message);
 
-    // 8. Select personality
+    // 8. Select personality (needs auth + siteConfig)
     const selectedPersonalityId = selectPersonalityByEmotion(
       emotion,
       reqPersonality ?? user.preferred_personality,
@@ -93,7 +104,7 @@ app.post('/chat', async (c) => {
     );
     const personality = getPersonalityForSite(siteConfig, reqPersonality ?? selectedPersonalityId);
 
-    // 9. Commander relay command check
+    // 9. Commander relay command check (only for Commander, rare path)
     let relayResult: unknown = undefined;
     if (auth.is_commander && command) {
       const result = await executeRelayCommand(env, auth, command);
@@ -106,17 +117,6 @@ app.post('/chat', async (c) => {
       }
     }
 
-    // 10. Echo Mode (doctrine lookup)
-    const echoMode = await engageEchoMode(env, message, mode);
-
-    // 11. Swarm mode
-    let swarmResult = null;
-    if (mode === 'swarm') {
-      swarmResult = await querySwarmTrinity(env, message);
-    }
-
-    // 12. Load local memories for context
-    const localMems = await getMemories(env.DB, user_id, 10);
     const localMemoriesStr = localMems.length > 0
       ? localMems.map(m => `[${m.memory_type}] ${m.content}`).join('\n')
       : '';
