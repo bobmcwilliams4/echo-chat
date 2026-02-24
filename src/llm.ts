@@ -19,18 +19,21 @@ async function callClaudeProxy(messages: LLMMessage[], env: Env): Promise<LLMRes
   const start = Date.now();
   const proxyUrl = (env.CLAUDE_PROXY_URL || 'https://claude-proxy.echo-op.com').replace(/\/+$/, '');
 
-  // Build system + query from messages array
   const systemMsgs = messages.filter(m => m.role === 'system').map(m => m.content);
   const userMsgs = messages.filter(m => m.role === 'user').map(m => m.content);
   const system = systemMsgs.join('\n\n') || undefined;
   const query = userMsgs[userMsgs.length - 1] || '';
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+
   const response = await fetch(`${proxyUrl}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ system, query }),
-    signal: AbortSignal.timeout(15000), // Fast timeout — fall to Azure quickly if proxy slow
+    signal: controller.signal,
   });
+  clearTimeout(timer);
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -55,154 +58,159 @@ async function callClaudeProxy(messages: LLMMessage[], env: Env): Promise<LLMRes
 async function callAzureGPT(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
   const endpoint = (env.AZURE_OPENAI_ENDPOINT || 'https://models.github.ai/inference/v1').replace(/\/+$/, '');
-  const response = await fetch(`${endpoint}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${env.AZURE_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4.1',
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      max_tokens: 4096,
-      temperature: 0.7,
-    }),
-    signal: AbortSignal.timeout(25000),
-  });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Azure GPT-4.1 error ${response.status}: ${text}`);
+  // Use AbortController + manual setTimeout (AbortSignal.timeout unreliable in Workers)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const response = await fetch(`${endpoint}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.AZURE_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4.1',
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        max_tokens: 4096,
+        temperature: 0.7,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Azure GPT-4.1 error ${response.status}: ${text}`);
+    }
+
+    const data = await response.json() as {
+      choices: Array<{ message: { content: string } }>;
+      usage?: { total_tokens: number };
+    };
+
+    return {
+      content: data.choices[0]?.message?.content ?? '',
+      provider: 'azure-gpt-4.1',
+      tokens_used: data.usage?.total_tokens ?? 0,
+      latency_ms: Date.now() - start,
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
   }
-
-  const data = await response.json() as {
-    choices: Array<{ message: { content: string } }>;
-    usage?: { total_tokens: number };
-  };
-
-  return {
-    content: data.choices[0]?.message?.content ?? '',
-    provider: 'azure-gpt-4.1',
-    tokens_used: data.usage?.total_tokens ?? 0,
-    latency_ms: Date.now() - start,
-  };
 }
 
 // ─── TERTIARY: Grok 3 mini ─────────────────────────────────────────────────
 async function callGrok(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
-  const response = await fetch('https://api.x.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${env.XAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'grok-3-mini',
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      max_tokens: 4096,
-      temperature: 0.8,
-    }),
-    signal: AbortSignal.timeout(25000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Grok error ${response.status}`);
-  }
-
-  const data = await response.json() as {
-    choices: Array<{ message: { content: string } }>;
-    usage?: { total_tokens: number };
-  };
-
-  return {
-    content: data.choices[0]?.message?.content ?? '',
-    provider: 'grok-3-mini',
-    tokens_used: data.usage?.total_tokens ?? 0,
-    latency_ms: Date.now() - start,
-  };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.XAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'grok-3-mini',
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        max_tokens: 4096,
+        temperature: 0.8,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) throw new Error(`Grok error ${response.status}`);
+    const data = await response.json() as { choices: Array<{ message: { content: string } }>; usage?: { total_tokens: number } };
+    return { content: data.choices[0]?.message?.content ?? '', provider: 'grok-3-mini', tokens_used: data.usage?.total_tokens ?? 0, latency_ms: Date.now() - start };
+  } catch (err) { clearTimeout(timer); throw err; }
 }
 
 // ─── TERTIARY: DeepSeek V3 ─────────────────────────────────────────────────
 async function callDeepSeek(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      max_tokens: 4096,
-      temperature: 0.7,
-    }),
-    signal: AbortSignal.timeout(25000),
-  });
-
-  if (!response.ok) {
-    throw new Error(`DeepSeek error ${response.status}`);
-  }
-
-  const data = await response.json() as {
-    choices: Array<{ message: { content: string } }>;
-    usage?: { total_tokens: number };
-  };
-
-  return {
-    content: data.choices[0]?.message?.content ?? '',
-    provider: 'deepseek-v3',
-    tokens_used: data.usage?.total_tokens ?? 0,
-    latency_ms: Date.now() - start,
-  };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        max_tokens: 4096,
+        temperature: 0.7,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) throw new Error(`DeepSeek error ${response.status}`);
+    const data = await response.json() as { choices: Array<{ message: { content: string } }>; usage?: { total_tokens: number } };
+    return { content: data.choices[0]?.message?.content ?? '', provider: 'deepseek-v3', tokens_used: data.usage?.total_tokens ?? 0, latency_ms: Date.now() - start };
+  } catch (err) { clearTimeout(timer); throw err; }
 }
 
 // ─── QUATERNARY: OpenRouter (free tier) ─────────────────────────────────────
 async function callOpenRouter(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://echo-op.com',
-      'X-Title': 'Echo Chat',
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-3.3-70b-instruct:free',
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      max_tokens: 4096,
-      temperature: 0.7,
-    }),
-    signal: AbortSignal.timeout(30000),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'https://echo-op.com',
+        'X-Title': 'Echo Chat',
+      },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-3.3-70b-instruct:free',
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        max_tokens: 4096,
+        temperature: 0.7,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) throw new Error(`OpenRouter error ${response.status}`);
+    const data = await response.json() as { choices: Array<{ message: { content: string } }>; usage?: { total_tokens: number } };
+    return { content: data.choices[0]?.message?.content ?? '', provider: 'openrouter-llama-3.3-70b', tokens_used: data.usage?.total_tokens ?? 0, latency_ms: Date.now() - start };
+  } catch (err) { clearTimeout(timer); throw err; }
+}
 
-  if (!response.ok) {
-    throw new Error(`OpenRouter error ${response.status}`);
-  }
-
-  const data = await response.json() as {
-    choices: Array<{ message: { content: string } }>;
-    usage?: { total_tokens: number };
-  };
-
-  return {
-    content: data.choices[0]?.message?.content ?? '',
-    provider: 'openrouter-llama-3.3-70b',
-    tokens_used: data.usage?.total_tokens ?? 0,
-    latency_ms: Date.now() - start,
-  };
+// Hard timeout via Promise.race — AbortSignal.timeout doesn't reliably abort in Workers
+function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Hard timeout after ${ms}ms`)), ms)),
+  ]);
 }
 
 // ─── Provider Registry ──────────────────────────────────────────────────────
 const PROVIDERS: LLMProvider[] = [
-  { name: 'claude-proxy', call: callClaudeProxy, priority: 0, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX', 'GS', 'PH', 'analysis', 'code'] },
-  { name: 'azure-gpt-4.1', call: callAzureGPT, priority: 1, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX'] },
+  // Claude proxy disabled — Cloudflare Tunnel fetch hangs 60s+ ignoring AbortController
+  // { name: 'claude-proxy', call: callClaudeProxy, priority: 0, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX', 'GS', 'PH', 'analysis', 'code'] },
+  { name: 'azure-gpt-4.1', call: callAzureGPT, priority: 0, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX', 'GS', 'PH', 'analysis', 'code'] },
   { name: 'grok-3-mini', call: callGrok, priority: 2, best_for: ['BR', 'creative', 'sarcasm', 'casual'] },
   { name: 'deepseek-v3', call: callDeepSeek, priority: 3, best_for: ['code', 'analysis', 'R2', '3P'] },
   { name: 'openrouter', call: callOpenRouter, priority: 4, best_for: ['fallback'] },
 ];
+
+// Hard timeout per provider — AbortSignal doesn't work reliably in Workers
+const PROVIDER_HARD_TIMEOUTS: Record<string, number> = {
+  'claude-proxy': 5000,
+  'azure-gpt-4.1': 15000,
+  'grok-3-mini': 10000,
+  'deepseek-v3': 10000,
+  'openrouter': 10000,
+};
 
 const STATIC_FALLBACKS: Record<string, string[]> = {
   EP: [
@@ -261,7 +269,8 @@ export async function routeLLM(
       const key = getProviderKey(provider.name, env);
       if (!key) continue;
 
-      const result = await provider.call(messages, env);
+      const hardTimeout = PROVIDER_HARD_TIMEOUTS[provider.name] ?? 10000;
+      const result = await raceTimeout(provider.call(messages, env), hardTimeout);
       if (result.content) return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

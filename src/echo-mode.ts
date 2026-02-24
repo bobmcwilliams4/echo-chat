@@ -96,34 +96,29 @@ export async function lookupDoctrines(
   mode: string = 'FAST',
   limit: number = 5,
 ): Promise<DoctrineResult[]> {
-  try {
-    // Engine Runtime uses /search (GET or POST), NOT /query
-    const params = new URLSearchParams({ q: query, limit: String(limit) });
-    if (domain) params.set('category', domain.toUpperCase());
+  // Hard 3s race timeout — service bindings don't honor AbortSignal reliably
+  const inner = async (): Promise<DoctrineResult[]> => {
+    try {
+      const params = new URLSearchParams({ q: query, limit: String(limit) });
+      if (domain) params.set('category', domain.toUpperCase());
+      const path = `/search?${params}`;
 
-    const path = `/search?${params}`;
-    console.log(`[DOCTRINE] Fetching via service binding: ${path}`);
+      const response = await env.ENGINE_RUNTIME_SVC.fetch(`https://internal${path}`, {
+        signal: AbortSignal.timeout(3000),
+      });
 
-    // Use Service Binding for Worker-to-Worker communication (avoids error 1042)
-    const response = await env.ENGINE_RUNTIME_SVC.fetch(`https://internal${path}`, {
-      signal: AbortSignal.timeout(15000),
-    });
-
-    console.log(`[DOCTRINE] Response status: ${response.status}`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.log(`[DOCTRINE] Error response: ${errorText.slice(0, 200)}`);
+      if (!response.ok) { await response.text(); return []; }
+      const data = await response.json() as { results?: DoctrineResult[] };
+      return data.results ?? [];
+    } catch {
       return [];
     }
+  };
 
-    const data = await response.json() as { results?: DoctrineResult[] };
-    console.log(`[DOCTRINE] Results count: ${data.results?.length ?? 0}`);
-    return data.results ?? [];
-  } catch (err) {
-    console.error(`[DOCTRINE] Fetch error: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
-  }
+  return Promise.race([
+    inner(),
+    new Promise<DoctrineResult[]>(resolve => setTimeout(() => resolve([]), 3000)),
+  ]);
 }
 
 export function hardenAuthority(doctrines: DoctrineResult[]): DoctrineResult[] {

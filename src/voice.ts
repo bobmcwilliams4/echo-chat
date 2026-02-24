@@ -33,6 +33,8 @@ async function generateEchoSpeak(
     const voiceName = getEchoSpeakVoice(personality.id);
     const cleanText = stripMarkdown(text);
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
     const response = await fetch(`${env.ECHO_SPEAK_URL}/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -42,8 +44,9 @@ async function generateEchoSpeak(
         speed: 1.0,
         output_format: 'wav',
       }),
-      signal: AbortSignal.timeout(60000),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
 
     if (!response.ok) {
       return { error: `Echo Speak error: ${response.status}` };
@@ -78,6 +81,8 @@ async function generateElevenLabs(
     const voiceSettings = personality.emotion_settings[emotion] ?? personality.emotion_settings['neutral'];
     const cleanText = stripMarkdown(text);
 
+    const elController = new AbortController();
+    const elTimer = setTimeout(() => elController.abort(), 5000);
     const response = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${personality.voice_id}`,
       {
@@ -96,9 +101,10 @@ async function generateElevenLabs(
             use_speaker_boost: true,
           },
         }),
-        signal: AbortSignal.timeout(30000),
+        signal: elController.signal,
       }
     );
+    clearTimeout(elTimer);
 
     if (!response.ok) {
       return { error: `ElevenLabs error: ${response.status}` };

@@ -60,17 +60,18 @@ app.post('/chat', async (c) => {
   const currentSessionId = session_id ?? generateSessionId();
 
   try {
-    // ── PARALLEL PHASE: Fire all independent lookups simultaneously ──
-    // These only depend on user_id/site_id/message from the request body.
-    // Running them in parallel cuts ~60s of serial D1 + HTTP waits to ~8s.
-    const [userResult, siteResult, historyResult, cortexResult, echoResult, memsResult, swarmResult_] = await Promise.all([
+    // ── PARALLEL PHASE: All lookups fire simultaneously ──
+    const emptyEcho = { doctrines: [] as import('./types').DoctrineResult[], confidence: '', doctrineContext: '', domains: [] as Array<{domain:string;score:number}>, engaged: false };
+    const emptyCortex = { shared_brain_memories: [], memory_prime_results: [], sentinel_memories: [], ekm_results: [], cognition_results: [] } as import('./types').CortexContext;
+
+    const [userResult, siteResult, historyResult, memsResult, cortexResult, echoResult, swarmResult_] = await Promise.all([
       getOrCreateUser(env.DB, user_id, email),
       getSiteConfig(env.DB, site_id, env.CACHE),
       getConversationHistory(env.DB, user_id, site_id, 40),
-      loadFullContext(env, user_id, message),
-      engageEchoMode(env, message, mode),
       getMemories(env.DB, user_id, 10),
-      mode === 'swarm' ? querySwarmTrinity(env, message) : Promise.resolve(null),
+      Promise.race([loadFullContext(env, user_id, message), new Promise<typeof emptyCortex>(r => setTimeout(() => r(emptyCortex), 3000))]),
+      Promise.race([engageEchoMode(env, message, mode), new Promise<typeof emptyEcho>(r => setTimeout(() => r(emptyEcho), 3000))]),
+      mode === 'swarm' ? Promise.race([querySwarmTrinity(env, message), new Promise<null>(r => setTimeout(() => r(null), 3000))]) : Promise.resolve(null),
     ]);
 
     const user = userResult;
@@ -182,13 +183,17 @@ app.post('/chat', async (c) => {
       c.executionCtx.waitUntil(extractMemoriesBackground(env, user_id, site_id, message, llmResponse.content));
     }
 
-    // 20. Voice generation (if requested)
+    // 20. Voice generation (only when EXPLICITLY requested by client)
     let voiceUrl: string | undefined;
-    if (enable_voice || siteConfig?.voice_enabled === 1) {
-      const voiceResult = await generateVoice(
+    if (enable_voice === true) {
+      const voicePromise = generateVoice(
         llmResponse.content, personality, responseEmotion, env,
         siteConfig?.voice_provider,
       );
+      const voiceResult = await Promise.race([
+        voicePromise,
+        new Promise<{ audio_url?: string; error?: string }>(r => setTimeout(() => r({ error: 'Voice timeout (5s)' }), 5000)),
+      ]);
       voiceUrl = voiceResult.audio_url;
     }
 

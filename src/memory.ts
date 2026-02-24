@@ -4,20 +4,15 @@
 import type { UserProfile, SiteConfig, LLMMessage } from './types';
 
 export async function getOrCreateUser(db: D1Database, userId: string, email?: string): Promise<UserProfile> {
-  const existing = await db.prepare(
-    'SELECT * FROM users WHERE user_id = ?'
-  ).bind(userId).first<UserProfile>();
+  // Single-query upsert: INSERT OR IGNORE + UPDATE + SELECT in one D1 batch
+  const results = await db.batch([
+    db.prepare('INSERT OR IGNORE INTO users (user_id, email, display_name, authority_level, trust_level, is_commander) VALUES (?, ?, ?, 2.0, 0, 0)').bind(userId, email ?? null, null),
+    db.prepare('UPDATE users SET last_seen = datetime("now"), total_messages = total_messages + 1 WHERE user_id = ?').bind(userId),
+    db.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId),
+  ]);
 
-  if (existing) {
-    await db.prepare(
-      'UPDATE users SET last_seen = datetime("now"), total_messages = total_messages + 1 WHERE user_id = ?'
-    ).bind(userId).run();
-    return existing;
-  }
-
-  await db.prepare(
-    'INSERT INTO users (user_id, email, display_name, authority_level, trust_level, is_commander) VALUES (?, ?, ?, 2.0, 0, 0)'
-  ).bind(userId, email ?? null, null).run();
+  const user = (results[2].results?.[0] as UserProfile | undefined);
+  if (user) return user;
 
   return {
     user_id: userId,

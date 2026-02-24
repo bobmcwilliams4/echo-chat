@@ -4,7 +4,15 @@
 
 import type { Env, CortexContext, CortexMemory } from './types';
 
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number = 10000): Promise<Response> {
+// Hard timeout via Promise.race — AbortSignal doesn't reliably abort service bindings
+function raceTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number = 3000): Promise<Response> {
   return fetch(url, {
     ...options,
     signal: AbortSignal.timeout(timeoutMs),
@@ -12,7 +20,7 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
 }
 
 // Service Binding fetch — bypasses *.workers.dev routing (error 1042)
-async function svcFetch(svc: Fetcher, path: string, options: RequestInit, timeoutMs: number = 10000): Promise<Response> {
+async function svcFetch(svc: Fetcher, path: string, options: RequestInit, timeoutMs: number = 3000): Promise<Response> {
   return svc.fetch(`https://internal${path}`, {
     ...options,
     signal: AbortSignal.timeout(timeoutMs),
@@ -95,7 +103,7 @@ async function queryCognitionCloud(env: Env, query: string): Promise<CortexMemor
     const response = await fetchWithTimeout(
       `https://echo-crystal-search.bmcii1976.workers.dev/search?q=${encodeURIComponent(query)}&limit=3`,
       { method: 'GET' },
-      8000,
+      4000,
     );
     if (!response.ok) { await response.text(); return []; }
     const data = await response.json() as { results?: Array<{ content: string; score?: number }> };
@@ -110,20 +118,22 @@ async function queryCognitionCloud(env: Env, query: string): Promise<CortexMemor
 }
 
 export async function loadFullContext(env: Env, userId: string, query: string): Promise<CortexContext> {
-  const [sharedBrain, memoryPrime, sentinel, ekm, cognition] = await Promise.allSettled([
-    querySharedBrain(env, userId, query),
-    queryMemoryPrime(env, query),
-    querySentinelMemory(env, userId),
-    queryEKMArchive(env, query),
-    queryCognitionCloud(env, query),
+  // Hard 3s race timeout per system — service bindings don't honor AbortSignal
+  const EMPTY: CortexMemory[] = [];
+  const [sharedBrain, memoryPrime, sentinel, ekm, cognition] = await Promise.all([
+    raceTimeout(querySharedBrain(env, userId, query), 3000, EMPTY),
+    raceTimeout(queryMemoryPrime(env, query), 3000, EMPTY),
+    raceTimeout(querySentinelMemory(env, userId), 3000, EMPTY),
+    queryEKMArchive(env, query), // instant (returns [])
+    raceTimeout(queryCognitionCloud(env, query), 3000, EMPTY),
   ]);
 
   return {
-    shared_brain_memories: sharedBrain.status === 'fulfilled' ? sharedBrain.value : [],
-    memory_prime_results: memoryPrime.status === 'fulfilled' ? memoryPrime.value : [],
-    sentinel_memories: sentinel.status === 'fulfilled' ? sentinel.value : [],
-    ekm_results: ekm.status === 'fulfilled' ? ekm.value : [],
-    cognition_results: cognition.status === 'fulfilled' ? cognition.value : [],
+    shared_brain_memories: sharedBrain,
+    memory_prime_results: memoryPrime,
+    sentinel_memories: sentinel,
+    ekm_results: ekm,
+    cognition_results: cognition,
   };
 }
 
