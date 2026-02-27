@@ -156,6 +156,61 @@ async function callDeepSeek(messages: LLMMessage[], env: Env): Promise<LLMRespon
   } catch (err) { clearTimeout(timer); throw err; }
 }
 
+// ─── GROQ LPU: Ultra-fast inference (300-1200 tok/sec) ──────────────────────
+// Llama 3.3 70B Versatile — best general quality on Groq
+async function callGroqVersatile(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
+  const start = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        max_tokens: 4096,
+        temperature: 0.7,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) throw new Error(`Groq error ${response.status}`);
+    const data = await response.json() as { choices: Array<{ message: { content: string } }>; usage?: { total_tokens: number } };
+    return { content: data.choices[0]?.message?.content ?? '', provider: 'groq-llama-3.3-70b', tokens_used: data.usage?.total_tokens ?? 0, latency_ms: Date.now() - start };
+  } catch (err) { clearTimeout(timer); throw err; }
+}
+
+// Llama 4 Scout — newest, cheapest ($0.11/M tokens)
+async function callGroqScout(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
+  const start = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        max_tokens: 4096,
+        temperature: 0.7,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) throw new Error(`Groq Scout error ${response.status}`);
+    const data = await response.json() as { choices: Array<{ message: { content: string } }>; usage?: { total_tokens: number } };
+    return { content: data.choices[0]?.message?.content ?? '', provider: 'groq-llama-4-scout', tokens_used: data.usage?.total_tokens ?? 0, latency_ms: Date.now() - start };
+  } catch (err) { clearTimeout(timer); throw err; }
+}
+
 // ─── QUATERNARY: OpenRouter (free tier) ─────────────────────────────────────
 async function callOpenRouter(messages: LLMMessage[], env: Env): Promise<LLMResponse> {
   const start = Date.now();
@@ -198,6 +253,8 @@ const PROVIDERS: LLMProvider[] = [
   // Claude proxy disabled — Cloudflare Tunnel fetch hangs 60s+ ignoring AbortController
   // { name: 'claude-proxy', call: callClaudeProxy, priority: 0, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX', 'GS', 'PH', 'analysis', 'code'] },
   { name: 'azure-gpt-4.1', call: callAzureGPT, priority: 0, best_for: ['doctrine', 'echo', 'EP', 'RA', 'SA', 'TH', 'NX', 'GS', 'PH', 'analysis', 'code'] },
+  { name: 'groq-versatile', call: callGroqVersatile, priority: 1, best_for: ['speed', 'fast', 'quick', 'casual', 'BE', 'TE', 'WM'] },
+  { name: 'groq-scout', call: callGroqScout, priority: 1, best_for: ['speed', 'fast', 'cheap', 'quick'] },
   { name: 'grok-3-mini', call: callGrok, priority: 2, best_for: ['BR', 'creative', 'sarcasm', 'casual'] },
   { name: 'deepseek-v3', call: callDeepSeek, priority: 3, best_for: ['code', 'analysis', 'R2', '3P'] },
   { name: 'openrouter', call: callOpenRouter, priority: 4, best_for: ['fallback'] },
@@ -207,6 +264,8 @@ const PROVIDERS: LLMProvider[] = [
 const PROVIDER_HARD_TIMEOUTS: Record<string, number> = {
   'claude-proxy': 5000,
   'azure-gpt-4.1': 15000,
+  'groq-versatile': 8000,
+  'groq-scout': 8000,
   'grok-3-mini': 10000,
   'deepseek-v3': 10000,
   'openrouter': 10000,
@@ -229,8 +288,33 @@ const STATIC_FALLBACKS: Record<string, string[]> = {
   ],
 };
 
-function getProviderOrder(personality: PersonalityDef, mode?: string): LLMProvider[] {
+// Model alias map — callers can use short names like "groq" or "groq-scout"
+const MODEL_ALIASES: Record<string, string[]> = {
+  'groq': ['groq-versatile', 'groq-scout'],
+  'groq-fast': ['groq-scout', 'groq-versatile'],
+  'groq-versatile': ['groq-versatile'],
+  'groq-scout': ['groq-scout'],
+  'azure': ['azure-gpt-4.1'],
+  'gpt': ['azure-gpt-4.1'],
+  'grok': ['grok-3-mini'],
+  'deepseek': ['deepseek-v3'],
+  'openrouter': ['openrouter'],
+};
+
+function getProviderOrder(personality: PersonalityDef, mode?: string, model?: string): LLMProvider[] {
   const sorted = [...PROVIDERS];
+
+  // Explicit model request — put requested providers first, others as fallback
+  if (model) {
+    const preferred = MODEL_ALIASES[model.toLowerCase()];
+    if (preferred) {
+      const prioritized = preferred
+        .map(name => sorted.find(p => p.name === name))
+        .filter((p): p is LLMProvider => !!p);
+      const rest = sorted.filter(p => !preferred.includes(p.name));
+      return [...prioritized, ...rest];
+    }
+  }
 
   if (mode === 'doctrine' || mode === 'echo') {
     sorted.sort((a, b) => {
@@ -260,8 +344,9 @@ export async function routeLLM(
   env: Env,
   personality: PersonalityDef,
   mode?: string,
+  model?: string,
 ): Promise<LLMResponse> {
-  const providers = getProviderOrder(personality, mode);
+  const providers = getProviderOrder(personality, mode, model);
   const errors: string[] = [];
 
   for (const provider of providers) {
@@ -290,6 +375,8 @@ function getProviderKey(providerName: string, env: Env): string | undefined {
   switch (providerName) {
     case 'claude-proxy': return env.CLAUDE_PROXY_URL || 'https://claude-proxy.echo-op.com';
     case 'azure-gpt-4.1': return env.AZURE_API_KEY;
+    case 'groq-versatile': return env.GROQ_API_KEY;
+    case 'groq-scout': return env.GROQ_API_KEY;
     case 'grok-3-mini': return env.XAI_API_KEY;
     case 'deepseek-v3': return env.DEEPSEEK_API_KEY;
     case 'openrouter': return env.OPENROUTER_API_KEY;

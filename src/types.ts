@@ -32,6 +32,7 @@ export interface Env {
   OPENROUTER_API_KEY: string;
   DEEPSEEK_API_KEY: string;
   ELEVENLABS_API_KEY: string;
+  GROQ_API_KEY: string;
   ECHO_API_KEY: string;
   GITHUB_TOKEN: string;
   // Service Bindings (Worker-to-Worker direct communication)
@@ -55,6 +56,7 @@ export interface ChatRequest {
   session_id?: string;
   personality?: string;
   mode?: 'chat' | 'doctrine' | 'swarm' | 'echo' | 'relay';
+  model?: string;
   enable_voice?: boolean;
   stream?: boolean;
   command?: RelayCommand;

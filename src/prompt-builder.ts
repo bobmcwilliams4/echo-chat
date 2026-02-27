@@ -4,6 +4,7 @@
 import type { Env, BloodlineAuth, PersonalityDef, CortexContext, SwarmResult, SiteConfig, LLMMessage } from './types';
 import { getBloodlineDirective, getClassifiedAccess } from './bloodline';
 import { buildCortexContextString } from './cortex';
+import { TAX_SYSTEM_PROMPT } from './tax-tools';
 
 export function buildSystemPrompt(params: {
   personality: PersonalityDef;
@@ -15,6 +16,7 @@ export function buildSystemPrompt(params: {
   voiceEnabled: boolean;
   env: Env;
   localMemories: string;
+  taxMode?: boolean;
 }): string {
   const layers: string[] = [];
 
@@ -39,6 +41,17 @@ export function buildSystemPrompt(params: {
   // LAYER 6: DOCTRINE CONTEXT
   if (params.doctrineContext) {
     layers.push(`--- DOCTRINE CONTEXT ---\n${params.doctrineContext}`);
+  }
+
+  // LAYER 6.5: TAX EXPERTISE (activated on tax-related queries)
+  if (params.taxMode) {
+    layers.push(`${TAX_SYSTEM_PROMPT}\n\n--- TAX SERVICE INSTRUCTIONS ---
+When the user wants to prepare a tax return, guide them to https://echo-ept.com/tax-returns
+where they can use the full interactive tax preparation system with document upload.
+For tax questions and planning, provide expert-level answers citing IRC sections and case law.
+For actual return preparation via chat, collect information methodically and use the tax API
+at https://echo-tax-return.bmcii1976.workers.dev to create clients, returns, income items,
+deductions, and run calculations. Always confirm sensitive data (SSN, EIN) before storing.`);
   }
 
   // LAYER 7: MEMORY CORTEX

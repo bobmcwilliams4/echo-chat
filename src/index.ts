@@ -16,6 +16,7 @@ import { buildSystemPrompt, buildMessagesArray } from './prompt-builder';
 import { generateVoice } from './voice';
 import { executeRelayCommand, canUseRelay, getRelayStatus, detectRelayCommand } from './relay';
 import { querySwarmTrinity, querySwarmProcess, getSwarmStatus, getFullInfrastructureStatus, checkServiceHealth } from './services';
+import { detectTaxIntent } from './tax-tools';
 
 type HonoEnv = { Bindings: Env };
 const app = new Hono<HonoEnv>();
@@ -52,7 +53,7 @@ app.post('/chat', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  const { message, user_id, site_id, session_id, personality: reqPersonality, mode, enable_voice, command, email } = body;
+  const { message, user_id, site_id, session_id, personality: reqPersonality, mode, model: reqModel, enable_voice, command, email } = body;
   if (!message || !user_id || !site_id) {
     return c.json({ error: 'message, user_id, and site_id are required' }, 400);
   }
@@ -122,7 +123,10 @@ app.post('/chat', async (c) => {
       ? localMems.map(m => `[${m.memory_type}] ${m.content}`).join('\n')
       : '';
 
-    // 13. Build system prompt (12 layers)
+    // 12.5. Detect tax intent
+    const isTaxQuery = detectTaxIntent(message);
+
+    // 13. Build system prompt (12+ layers)
     const systemPrompt = buildSystemPrompt({
       personality,
       auth,
@@ -133,6 +137,7 @@ app.post('/chat', async (c) => {
       voiceEnabled: enable_voice ?? (siteConfig?.voice_enabled === 1),
       env,
       localMemories: localMemoriesStr,
+      taxMode: isTaxQuery,
     });
 
     // 14. Build messages array
@@ -147,8 +152,8 @@ app.post('/chat', async (c) => {
       });
     }
 
-    // 15. Route to LLM
-    const llmResponse = await routeLLM(messages, env, personality, mode);
+    // 15. Route to LLM (pass explicit model if requested, e.g. "groq" for Groq LPU speed)
+    const llmResponse = await routeLLM(messages, env, personality, mode, reqModel);
 
     // 16. Extract emotion from response
     const responseEmotion = emotion.dominant;
